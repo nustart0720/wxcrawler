@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 import re
+import os
 
 import requests
 from selenium import webdriver
@@ -18,6 +19,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import html2text
+from dotenv import load_dotenv
 
 # 配置日志
 logging.basicConfig(
@@ -26,16 +28,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 加载 .env 文件
+load_dotenv()
+
 class WeixinCrawler:
-    def __init__(self, account_list: List[str], chrome_driver_path: str = '/usr/local/bin/chromedriver', max_articles: int = 5):
+    def __init__(self, account_list: List[str], chrome_driver_path: str = None, max_articles: int = 5):
         """
         初始化微信公众号爬虫
         :param account_list: 要爬取的公众号列表
-        :param chrome_driver_path: ChromeDriver路径
+        :param chrome_driver_path: ChromeDriver路径，如果不指定则从环境变量获取
         :param max_articles: 每个公众号最多取的文章数量，默认为5
         """
         self.account_list = account_list
-        self.chrome_driver_path = chrome_driver_path
+        # 优先级：参数 > .env文件 > 系统环境变量
+        self.chrome_driver_path = chrome_driver_path or os.getenv('CHROME_DRIVER_PATH')
+        if not self.chrome_driver_path:
+            raise ValueError("请在 .env 文件中设置 CHROME_DRIVER_PATH 或在初始化时提供 chrome_driver_path")
         self.max_articles = max_articles
         self.cookie_file = Path('account_cookie.txt')
         self.base_url = 'https://mp.weixin.qq.com'
@@ -234,7 +242,7 @@ class WeixinCrawler:
                 
             # 打印搜索结果
             logger.info(f"\n找到 {len(account_list)} 个相关公众号:")
-            print("\n序号  公众号名称  认证信息  简介")
+            print("\n��号  公众号名称  认证信息  简介")
             print("-" * 50)
             
             for idx, acc in enumerate(account_list, 1):
@@ -475,9 +483,10 @@ class WeixinCrawler:
                 logger.error(f"公众号 {account} 爬取失败")
 
 if __name__ == '__main__':
-    # 设置要爬取的公众号列表
-    account_list = ['极客时间']
+    # 从环境变量获取配置
+    account_list = os.getenv('ACCOUNT_LIST', '极客时间').split(',')
+    max_articles = int(os.getenv('MAX_ARTICLES', '10'))
     
     # 创建爬虫实例并运行
-    crawler = WeixinCrawler(account_list, chrome_driver_path='/usr/local/bin/chromedriver', max_articles=10)
+    crawler = WeixinCrawler(account_list, max_articles=max_articles)
     crawler.run()

@@ -1,0 +1,12 @@
+*.csv
+*.png
+*.txt
+
+# 环境变量文件
+.env
+
+# 其他文件...
+*.pyc
+__pycache__/
+account_cookie.txt
+qrcode.png

@@ -36,16 +36,16 @@ A crawler tool for WeChat Official Account articles.
 2. 环境要求 | Requirements
 - Python 3.6+
 - Chrome浏览器
-- ChromeDriver (与Chrome版本匹配)
+- ChromeDriver (与Chrome版本匹配) 下载地址: https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json
 
 
 3. 配置说明 | Configuration
-设置要爬取的公众号列表
-account_list = ['公众号名称1', '公众号名称2']
+修改 .env.example 文件，设置要爬取的公众号列表、爬取的文章数量、ChromeDriver路径，然后把 .env.example 文件名修改为 .env 文件
 
-3. 运行爬虫 | Run Crawler
 
-4. 输出说明 | Output
+4. 运行爬虫 | Run Crawler
+
+5. 输出说明 | Output
 - 程序会为每个公众号创建一个CSV文件
 - CSV文件包含文章标题、链接和Markdown格式的内容
 - 文件名格式：`公众号名称.csv`
