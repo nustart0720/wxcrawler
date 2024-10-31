@@ -111,11 +111,46 @@ class WeixinCrawler:
             logger.error(f"获取二维码时发生错误: {e}")
             return False
 
+    def _verify_cookies(self, cookies: Dict[str, str]) -> bool:
+        """
+        验证cookies是否有效
+        :param cookies: cookies字典
+        :return: cookies是否有效
+        """
+        try:
+            # 尝试访问主页
+            response = requests.get(self.base_url, cookies=cookies, headers=self.headers)
+            
+            # 如果能获取到token，说明cookie有效
+            token = re.findall(r'token=(\d+)', str(response.url))
+            if token:
+                logger.info("当前cookies仍然有效")
+                return True
+            
+            logger.info("cookies已失效")
+            return False
+            
+        except Exception as e:
+            logger.error(f"验证cookies时发生错误: {e}")
+            return False
+
     def login(self) -> bool:
         """
         执行登录流程
         :return: 是否登录成功
         """
+        # 首先检查是否存在cookie文件
+        if self.cookie_file.exists():
+            try:
+                with open(self.cookie_file, 'r', encoding='utf-8') as f:
+                    cookies = json.load(f)
+                # 验证现有cookie是否有效
+                if self._verify_cookies(cookies):
+                    return True
+                logger.info("现有cookies已失效，需要重新登录")
+            except Exception as e:
+                logger.error(f"读取cookies文件时发生错误: {e}")
+        
         browser = None
         try:
             browser = self._init_chrome_driver()
