@@ -444,5 +444,5 @@ if __name__ == '__main__':
     account_list = ['极客时间']
     
     # 创建爬虫实例并运行
-    crawler = WeixinCrawler(account_list)
+    crawler = WeixinCrawler(account_list, chrome_driver_path='/usr/local/bin/chromedriver', max_articles=10)
     crawler.run()
