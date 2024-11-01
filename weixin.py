@@ -115,6 +115,11 @@ class WeixinCrawler:
             return False
 
     def get_qrcode_status(self, cookie_dict):
+        """
+        判断二维码状态
+        :param cookie_dict: cookie字典
+        :return: 是否扫码成功
+        """
         headers = self.headers.copy()
         headers['Cookie'] = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
         url = 'https://mp.weixin.qq.com/cgi-bin/scanloginqrcode?action=ask&token=&lang=zh_CN&f=json&ajax=1'
