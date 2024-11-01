@@ -7,7 +7,6 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 import re
-import os
 
 import requests
 from selenium import webdriver
@@ -19,7 +18,6 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from bs4 import BeautifulSoup
 import html2text
-from dotenv import load_dotenv
 
 # 配置日志
 logging.basicConfig(
@@ -28,22 +26,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 加载 .env 文件
-load_dotenv()
 
 class WeixinCrawler:
-    def __init__(self, account_list: List[str], chrome_driver_path: str = None, max_articles: int = 5):
+    def __init__(self, account_list: List[str], chrome_driver_path: str = '/usr/local/bin/chromedriver',
+                 max_articles: int = 5):
         """
         初始化微信公众号爬虫
         :param account_list: 要爬取的公众号列表
-        :param chrome_driver_path: ChromeDriver路径，如果不指定则从环境变量获取
+        :param chrome_driver_path: ChromeDriver路径
         :param max_articles: 每个公众号最多取的文章数量，默认为5
         """
         self.account_list = account_list
-        # 优先级：参数 > .env文件 > 系统环境变量
-        self.chrome_driver_path = chrome_driver_path or os.getenv('CHROME_DRIVER_PATH')
-        if not self.chrome_driver_path:
-            raise ValueError("请在 .env 文件中设置 CHROME_DRIVER_PATH 或在初始化时提供 chrome_driver_path")
+        self.chrome_driver_path = chrome_driver_path
         self.max_articles = max_articles
         self.cookie_file = Path('account_cookie.txt')
         self.base_url = 'https://mp.weixin.qq.com'
@@ -52,6 +46,7 @@ class WeixinCrawler:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
         }
+        self.qrcode_flag = True
 
     def _init_chrome_driver(self) -> webdriver.Chrome:
         """初始化Chrome浏览器"""
@@ -61,7 +56,7 @@ class WeixinCrawler:
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
-        
+
         service = Service(self.chrome_driver_path)
         return webdriver.Chrome(service=service, options=chrome_options)
 
@@ -74,23 +69,23 @@ class WeixinCrawler:
         """
         if required_cookies is None:
             required_cookies = ['ua_id', 'uuid', '_clck']
-        
+
         max_attempts = 10
         for attempt in range(max_attempts):
             cookies = browser.get_cookies()
             cookie_dict = {cookie['name']: cookie['value'] for cookie in cookies}
-            
+
             missing_cookies = [name for name in required_cookies if name not in cookie_dict]
-            
+
             if not missing_cookies:
                 logger.info("已成功获取所有必要的cookies")
                 return cookie_dict
-            
+
             logger.info(f"第 {attempt + 1} 次尝试，还缺少以下cookies: {missing_cookies}")
             if attempt % 2 == 0:
                 browser.refresh()
             time.sleep(3)
-        
+
         raise TimeoutException("无法获取所需的全部cookies")
 
     def _get_qrcode(self, cookie_dict: Dict[str, str]) -> bool:
@@ -101,10 +96,10 @@ class WeixinCrawler:
         """
         headers = self.headers.copy()
         headers['Cookie'] = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
-        
+
         random_timestamp = str(int(time.time() * 1000))
         qrcode_url = f'{self.base_url}/cgi-bin/scanloginqrcode?action=getqrcode&random={random_timestamp}'
-        
+
         try:
             response = requests.get(qrcode_url, headers=headers)
             if response.status_code == 200:
@@ -119,70 +114,62 @@ class WeixinCrawler:
             logger.error(f"获取二维码时发生错误: {e}")
             return False
 
-    def _verify_cookies(self, cookies: Dict[str, str]) -> bool:
-        """
-        验证cookies是否有效
-        :param cookies: cookies字典
-        :return: cookies是否有效
-        """
+    def get_qrcode_status(self, cookie_dict):
+        headers = self.headers.copy()
+        headers['Cookie'] = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
+        url = 'https://mp.weixin.qq.com/cgi-bin/scanloginqrcode?action=ask&token=&lang=zh_CN&f=json&ajax=1'
+        data = {
+            'action': 'ask',
+            'token': '',
+            'lang': 'zh_CN',
+            'f': 'json',
+            'ajax': 1,
+        }
         try:
-            # 尝试访问主页
-            response = requests.get(self.base_url, cookies=cookies, headers=self.headers)
-            
-            # 如果能获取到token，说明cookie有效
-            token = re.findall(r'token=(\d+)', str(response.url))
-            if token:
-                logger.info("当前cookies仍然有效")
-                return True
-            
-            logger.info("cookies已失效")
-            return False
-            
+            res = requests.get(url=url, params=data, headers=headers).json()
+            if res.get('status') == 0:
+                logger.info('未扫码')
+            elif res.get('status') == 4:
+                logger.info('已扫码')
+            elif res.get('status') == 1:
+                logger.info('已登录')
+                self.qrcode_flag = False
+            time.sleep(4)
         except Exception as e:
-            logger.error(f"验证cookies时发生错误: {e}")
-            return False
+            logger.error(f'检测二维码状态出错')
+            return 'error'
 
     def login(self) -> bool:
         """
         执行登录流程
         :return: 是否登录成功
         """
-        # 首先检查是否存在cookie文件
-        if self.cookie_file.exists():
-            try:
-                with open(self.cookie_file, 'r', encoding='utf-8') as f:
-                    cookies = json.load(f)
-                # 验证现有cookie是否有效
-                if self._verify_cookies(cookies):
-                    return True
-                logger.info("现有cookies已失效，需要重新登录")
-            except Exception as e:
-                logger.error(f"读取cookies文件时发生错误: {e}")
-        
         browser = None
         try:
             browser = self._init_chrome_driver()
             logger.info("启动浏览器，打开微信公众号登录界面...")
             browser.get(self.base_url)
-            
+
             cookie_dict = self._wait_for_cookies(browser)
             if not self._get_qrcode(cookie_dict):
                 return False
-            
+
             logger.info("请在 20 秒内使用微信扫描二维码登录...")
-            time.sleep(20)  # 等待扫码
-            
+            self.start_time = int(time.time())
+            while self.qrcode_flag:
+                self.get_qrcode_status(cookie_dict)
+
             # 保存登录后的cookies
             browser.get(self.base_url)
             cookies = browser.get_cookies()
             cookie_dict = {cookie['name']: cookie['value'] for cookie in cookies}
-            
+
             with open(self.cookie_file, 'w', encoding='utf-8') as f:
                 json.dump(cookie_dict, f)
             logger.info("登录cookies已保存到本地")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"登录过程中发生错误: {e}")
             return False
@@ -221,10 +208,10 @@ class WeixinCrawler:
             'f': 'json',
             'ajax': '1',
         }
-        
+
         try:
             response = requests.get(search_url, cookies=cookies, headers=self.headers, params=params)
-            
+
             # 获取并更新cookies
             new_cookies = response.cookies.get_dict()
             if new_cookies:
@@ -233,31 +220,31 @@ class WeixinCrawler:
                 with open(self.cookie_file, 'w', encoding='utf-8') as f:
                     json.dump(cookies, f)
                 logger.info("已更新本地cookies")
-            
+
             account_list = response.json().get('list', [])
-            
+
             if not account_list:
                 logger.error(f"未找到与 '{account}' 相关的公众号")
                 return None
-                
+
             # 打印搜索结果
             logger.info(f"\n找到 {len(account_list)} 个相关公众号:")
-            print("\n��号  公众号名称  认证信息  简介")
+            print("\n序号  公众号名称  认证信息  简介")
             print("-" * 50)
-            
+
             for idx, acc in enumerate(account_list, 1):
                 nickname = acc.get('nickname', '未知')
                 signature = acc.get('signature', '无')
                 verified = "已认证" if acc.get('verified', False) else "未认证"
                 print(f"{idx:<4} {nickname:<10} {verified:<6} {signature}")
-                
+
             # 用户选择
             while True:
                 try:
                     choice = input("\n请输入要爬取的公众号序号 (输入 q 退出): ")
                     if choice.lower() == 'q':
                         return None
-                        
+
                     choice_idx = int(choice) - 1
                     if 0 <= choice_idx < len(account_list):
                         selected = account_list[choice_idx]
@@ -270,7 +257,7 @@ class WeixinCrawler:
                 except KeyboardInterrupt:
                     print("\n已取消选择")
                     return None
-                
+
         except Exception as e:
             logger.error(f"获取公众号fakeid失败: {e}")
             return None
@@ -285,22 +272,22 @@ class WeixinCrawler:
             # 每次都重新读取cookies，确保使用最新的
             with open(self.cookie_file, 'r', encoding='utf-8') as f:
                 cookies = json.load(f)
-            
+
             token = self._get_token(cookies)
             print(f"token: {token}")
             if not token:
                 return False
-                
+
             fakeid = self._get_account_fakeid(account, token, cookies)
             if not fakeid:
                 return False
-            
+
             # 重新读取更新后的cookies
             with open(self.cookie_file, 'r', encoding='utf-8') as f:
                 cookies = json.load(f)
-            
+
             return self._save_articles(account, fakeid, token, cookies)
-            
+
         except Exception as e:
             logger.error(f"爬取文章过程中发生错误: {e}")
             return False
@@ -310,23 +297,23 @@ class WeixinCrawler:
         file_name = f'{account}.csv'
         file_head = ['title', 'link', 'content']
         articles_saved = 0  # 记录已保存的文章数量
-        
+
         try:
             with open(file_name, 'w', encoding='utf-8', newline='') as f:
                 writer = csv.DictWriter(f, file_head)
                 writer.writeheader()
-                
+
                 begin = 0
                 while True:
                     articles = self._get_articles_batch(fakeid, token, cookies, begin)
                     if not articles:
                         break
-                    
+
                     for article in articles['list']:
                         if articles_saved >= self.max_articles:
                             logger.info(f"已达到最大文章数量限制: {self.max_articles}")
                             return True
-                            
+
                         try:
                             content = self._get_article_content(article['link'], cookies)
                             article['content'] = content
@@ -336,18 +323,18 @@ class WeixinCrawler:
                         except Exception as e:
                             logger.error(f"获取文章内容失败: {article['title']}, 错误: {e}")
                             article['content'] = ''
-                        
+
                         time.sleep(random.uniform(2, 4))
-                    
+
                     if articles_saved >= self.max_articles:
                         break
-                        
+
                     begin += 5
                     time.sleep(2)
-            
+
             logger.info(f"共成功保存 {articles_saved} 篇文章")
             return True
-            
+
         except Exception as e:
             logger.error(f"保存文章时发生错误: {e}")
             return False
@@ -377,19 +364,19 @@ class WeixinCrawler:
             'f': 'json',
             'ajax': '1'
         }
-        
+
         try:
             response = requests.get(url, cookies=cookies, headers=self.headers, params=params)
             data = response.json()
-            
+
             # 添加响应检查和日志
             if 'base_resp' in data and data['base_resp'].get('ret') != 0:
                 logger.error(f"获取文章列表失败: {data['base_resp']}")
                 return None
-            
+
             articles = []
             publish_page = eval(data.get('publish_page', {}))
-            
+
             for page in publish_page.get('publish_list', []):
                 # print(f" type of page: {type(page)}, page: {page}")
                 if page:
@@ -402,12 +389,12 @@ class WeixinCrawler:
                         }
                         articles.append(article_data)
                         logger.info(f"获取到文章: {article_data['title']}")
-            
+
             return {
                 'list': articles,
                 'total': publish_page.get('total_count', 0)  # 更新总数的获取位置
             }
-            
+
         except requests.RequestException as e:
             logger.error(f"请求文章列表时发生网络错误: {e}")
             return None
@@ -428,37 +415,37 @@ class WeixinCrawler:
         try:
             # 处理URL中的转义字符
             url = url.replace('\\/', '/')
-            
+
             # 构建请求头
             headers = self.headers.copy()
             headers['Host'] = 'mp.weixin.qq.com'
             headers['Upgrade-Insecure-Requests'] = '1'
-            
+
             # 发送请求获取文章内容
             response = requests.get(url, cookies=cookies, headers=headers, timeout=20)
             response.raise_for_status()  # 检查响应状态
             response.encoding = 'utf-8'
-            
+
             # 使用 BeautifulSoup 解析内容
             soup = BeautifulSoup(response.text, 'html.parser')
             article_element = soup.find(class_="rich_media_content")
-            
+
             if not article_element:
                 logger.error(f"未找到文章内容: {url}")
                 return ""
-                
+
             # 移除脚本和样式
             for script in article_element(["script", "style"]):
                 script.decompose()
-            
+
             # 使用 html2text 转换为 markdown 格式文本
             h = html2text.HTML2Text()
             h.ignore_links = False
             h.ignore_images = False
             text_content = h.handle(str(article_element))
-            
+
             return text_content.strip()
-            
+
         except requests.Timeout:
             logger.error(f"请求文章超时: {url}")
             return ""
@@ -474,7 +461,7 @@ class WeixinCrawler:
         if not self.login():
             logger.error("登录失败")
             return
-            
+
         for account in self.account_list:
             logger.info(f"开始爬取公众号：{account}")
             if self.crawl_articles(account):
@@ -482,11 +469,11 @@ class WeixinCrawler:
             else:
                 logger.error(f"公众号 {account} 爬取失败")
 
+
 if __name__ == '__main__':
-    # 从环境变量获取配置
-    account_list = os.getenv('ACCOUNT_LIST', '极客时间').split(',')
-    max_articles = int(os.getenv('MAX_ARTICLES', '10'))
-    
+    # 设置要爬取的公众号列表
+    account_list = ['极客时间']
+
     # 创建爬虫实例并运行
-    crawler = WeixinCrawler(account_list, max_articles=max_articles)
+    crawler = WeixinCrawler(account_list, chrome_driver_path='./chromedriver-win64/chromedriver.exe', max_articles=10)
     crawler.run()
