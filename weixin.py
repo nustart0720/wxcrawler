@@ -142,6 +142,49 @@ class WeixinCrawler:
             logger.error(f"验证cookies时发生错误: {e}")
             return False
 
+    def _check_login_status(self, cookie_dict: Dict[str, str], max_wait_time: int = 120) -> bool:
+        """
+        检查扫码登录状态
+        :param cookie_dict: cookie字典
+        :param max_wait_time: 最大等待时间(秒)
+        :return: 是否登录成功
+        """
+        headers = self.headers.copy()
+        headers['Cookie'] = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
+        url = 'https://mp.weixin.qq.com/cgi-bin/scanloginqrcode'
+        params = {
+            'action': 'ask',
+            'token': '',
+            'lang': 'zh_CN',
+            'f': 'json',
+            'ajax': '1'
+        }
+
+        start_time = time.time()
+        while time.time() - start_time < max_wait_time:
+            try:
+                response = requests.get(url=url, params=params, headers=headers)
+                res = response.json()
+                
+                if res.get('status') == 0:
+                    logger.info('等待扫码...')
+                elif res.get('status') == 4:
+                    logger.info('已扫码，等待确认...')
+                elif res.get('status') == 1:
+                    logger.info('已确认登录')
+                    time.sleep(4) # 需要等待，否则 cookie 可能获取不全
+                    return True
+                else:
+                    logger.warning(f'未知状态: {res}')
+                
+                time.sleep(2)
+            except Exception as e:
+                logger.error(f"检查登录状态时发生错误: {e}")
+                time.sleep(2)
+                
+        logger.error("登录超时")
+        return False
+
     def login(self) -> bool:
         """
         执行登录流程
@@ -169,8 +212,9 @@ class WeixinCrawler:
             if not self._get_qrcode(cookie_dict):
                 return False
             
-            logger.info("请在 20 秒内使用微信扫描二维码登录...")
-            time.sleep(20)  # 等待扫码
+            # 替换固定等待为状态检查
+            if not self._check_login_status(cookie_dict):
+                return False
             
             # 保存登录后的cookies
             browser.get(self.base_url)
@@ -242,7 +286,7 @@ class WeixinCrawler:
                 
             # 打印搜索结果
             logger.info(f"\n找到 {len(account_list)} 个相关公众号:")
-            print("\n��号  公众号名称  认证信息  简介")
+            print("\n序号  公众号名称  认证信息  简介")
             print("-" * 50)
             
             for idx, acc in enumerate(account_list, 1):
